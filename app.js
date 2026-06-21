@@ -1030,6 +1030,13 @@ function splitUtterance(uttId, panel) {
     utt.endTime = midTime;
     state.utterances.splice(idx + 1, 0, newUtt);
 
+    state.chapters.forEach(ch => {
+        if (ch.utteranceIds && ch.utteranceIds.includes(uttId)) {
+            ch.utteranceIds.splice(ch.utteranceIds.indexOf(uttId) + 1, 0, newUtt.id);
+        }
+    });
+
+    updateQuotesAfterUttChange(uttId);
     updateChaptersAfterUttChange();
 
     renderSpeakers(); renderTimeline(); renderTranscript();
@@ -1056,6 +1063,7 @@ function mergeUtterance(uttId, direction) {
     state.utterances.splice(targetIdx > idx ? targetIdx : idx, 1);
 
     updateQuotesAfterUttChange(second.id, first.id);
+    updateQuotesAfterUttChange(first.id);
     updateChaptersAfterUttChange();
 
     renderSpeakers(); renderTimeline(); renderTranscript();
@@ -1075,9 +1083,10 @@ function updateQuotesAfterUttChange(oldUttId, newUttId = null) {
                 const sp = state.speakers.find(s => s.id === utt.speakerId);
                 q.speakerName = sp ? sp.name : q.speakerName;
                 q.color = sp ? sp.color : q.color;
+                q.startTime = utt.startTime;
+                q.endTime = utt.endTime;
                 if (!q.isPartial) {
                     q.text = utt.text;
-                    q.endTime = utt.endTime;
                 }
             }
         }
@@ -1089,10 +1098,23 @@ function updateChaptersAfterUttChange() {
     state.chapters.forEach(ch => {
         if (ch.utteranceIds && ch.utteranceIds.length > 0) {
             const validIds = ch.utteranceIds.filter(id => state.utterances.some(u => u.id === id));
+            ch.utteranceIds = validIds;
             if (validIds.length > 0) {
                 const utts = validIds.map(id => state.utterances.find(u => u.id === id)).filter(Boolean);
                 ch.startTime = Math.min(...utts.map(u => u.startTime));
                 ch.endTime = Math.max(...utts.map(u => u.endTime));
+                const uniqueSpeakers = [];
+                const sids = new Set();
+                utts.forEach(u => {
+                    if (!sids.has(u.speakerId)) {
+                        sids.add(u.speakerId);
+                        const sp = state.speakers.find(s => s.id === u.speakerId);
+                        if (sp) uniqueSpeakers.push({ id: sp.id, name: sp.name, color: sp.color });
+                    }
+                });
+                if (uniqueSpeakers.length > 0) {
+                    ch.speakers = uniqueSpeakers;
+                }
             }
         }
     });
