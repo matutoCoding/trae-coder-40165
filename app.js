@@ -8,6 +8,8 @@ const state = {
     audioLoaded: false,
     transcriptFile: null,
     transcriptLoaded: false,
+    fileName: '',
+    transcriptName: '',
     duration: 0,
     currentTime: 0,
     isPlaying: false,
@@ -23,7 +25,13 @@ const state = {
     multiSelectedIds: new Set(),
     showTimestamps: true,
     autoScroll: true,
-    pendingQuoteSelection: null
+    pendingQuoteSelection: null,
+    history: [],
+    historyIndex: -1,
+    historyMax: 50,
+    findMatches: [],
+    currentFindIndex: -1,
+    filterSpeakerId: null
 };
 
 const speakerColors = [
@@ -116,6 +124,312 @@ function debounceRenderShownotesPreview() {
 }
 
 /* ==========================================================================
+   撤销/重做系统
+   ========================================================================== */
+function serializeSerializableState() {
+    return {
+        fileName: state.fileName,
+        transcriptName: state.transcriptName,
+        duration: state.duration,
+        speakers: JSON.parse(JSON.stringify(state.speakers)),
+        utterances: JSON.parse(JSON.stringify(state.utterances)),
+        quotes: JSON.parse(JSON.stringify(state.quotes)),
+        chapters: JSON.parse(JSON.stringify(state.chapters)),
+        viewpoints: JSON.parse(JSON.stringify(state.viewpoints)),
+        episodeTitle: document.getElementById('episodeTitle')?.value || '',
+        episodeDesc: document.getElementById('episodeDesc')?.value || ''
+    };
+}
+
+function restoreSerializableState(snap) {
+    state.fileName = snap.fileName || '';
+    state.transcriptName = snap.transcriptName || '';
+    state.duration = snap.duration || 0;
+    state.speakers = JSON.parse(JSON.stringify(snap.speakers || []));
+    state.utterances = JSON.parse(JSON.stringify(snap.utterances || []));
+    state.quotes = JSON.parse(JSON.stringify(snap.quotes || []));
+    state.chapters = JSON.parse(JSON.stringify(snap.chapters || []));
+    state.viewpoints = JSON.parse(JSON.stringify(snap.viewpoints || []));
+    const titleEl = document.getElementById('episodeTitle');
+    const descEl = document.getElementById('episodeDesc');
+    if (titleEl) titleEl.value = snap.episodeTitle || '';
+    if (descEl) descEl.value = snap.episodeDesc || '';
+    const fnEl = document.getElementById('fileName');
+    const tnEl = document.getElementById('transcriptName');
+    if (fnEl) fnEl.textContent = state.fileName || '未导入音频';
+    if (tnEl) {
+        if (state.transcriptName) {
+            tnEl.textContent = '📄 ' + state.transcriptName;
+            tnEl.style.display = '';
+        } else {
+            tnEl.style.display = 'none';
+        }
+    }
+}
+
+function pushHistory() {
+    const snap = serializeSerializableState();
+    if (state.historyIndex < state.history.length - 1) {
+        state.history = state.history.slice(0, state.historyIndex + 1);
+    }
+    state.history.push(snap);
+    if (state.history.length > state.historyMax) {
+        state.history.shift();
+    } else {
+        state.historyIndex++;
+    }
+    updateUndoRedoButtons();
+}
+
+function updateUndoRedoButtons() {
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    if (undoBtn) undoBtn.disabled = state.historyIndex <= 0;
+    if (redoBtn) redoBtn.disabled = state.historyIndex >= state.history.length - 1;
+}
+
+function undo() {
+    if (state.historyIndex <= 0) return;
+    if (state.historyIndex === state.history.length - 1) {
+        const cur = serializeSerializableState();
+        if (state.history.length < state.historyMax) {
+            state.history.push(cur);
+        }
+    }
+    state.historyIndex--;
+    const snap = state.history[state.historyIndex];
+    if (snap) {
+        restoreSerializableState(snap);
+        renderAllFromState();
+    }
+    updateUndoRedoButtons();
+    showToast('已撤销');
+}
+
+function redo() {
+    if (state.historyIndex >= state.history.length - 1) return;
+    state.historyIndex++;
+    const snap = state.history[state.historyIndex];
+    if (snap) {
+        restoreSerializableState(snap);
+        renderAllFromState();
+    }
+    updateUndoRedoButtons();
+    showToast('已重做');
+}
+
+function renderAllFromState() {
+    renderSpeakers();
+    renderTimeline();
+    renderTranscript();
+    renderQuotes();
+    renderChapters();
+    renderViewpoints();
+    updateQuoteCount();
+    debounceRenderShownotesPreview();
+    populateFilterSpeakerSelect();
+}
+
+/* ==========================================================================
+   本地保存 & 项目导入导出
+   ========================================================================== */
+const STORAGE_KEY = 'podcast_editor_project_v1';
+
+function saveProjectToStorage() {
+    const snap = serializeSerializableState();
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+        showToast('已保存到本地浏览器');
+    } catch (e) {
+        showToast('保存失败：' + e.message, 'error');
+    }
+}
+
+function loadProjectFromStorage() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return false;
+        const snap = JSON.parse(raw);
+        if (!snap.utterances || snap.utterances.length === 0) return false;
+        restoreSerializableState(snap);
+        return true;
+    } catch (e) {
+        console.warn('load project failed', e);
+        return false;
+    }
+}
+
+function exportProjectFile() {
+    const snap = serializeSerializableState();
+    const json = JSON.stringify(snap, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const title = document.getElementById('episodeTitle')?.value || '';
+    const name = (title || state.fileName || '播客项目').replace(/[\\/:*?"<>|]/g, '_') + '.podcast.json';
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('项目已导出');
+}
+
+function importProjectFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const snap = JSON.parse(e.target.result);
+            if (!snap.utterances || !snap.speakers) {
+                showToast('项目文件格式不正确', 'error');
+                return;
+            }
+            restoreSerializableState(snap);
+            document.getElementById('uploadZone').style.display = 'none';
+            document.getElementById('workspace').style.display = '';
+            renderAllFromState();
+            pushHistory();
+            showToast('项目已导入，继续编辑吧');
+        } catch (err) {
+            showToast('导入失败：' + err.message, 'error');
+        }
+    };
+    reader.readAsText(file);
+}
+
+/* ==========================================================================
+   查找替换 & 说话人筛选
+   ========================================================================== */
+function populateFilterSpeakerSelect() {
+    const sel = document.getElementById('filterSpeaker');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">全部说话人</option>';
+    state.speakers.forEach(sp => {
+        const opt = document.createElement('option');
+        opt.value = sp.id;
+        opt.textContent = sp.name;
+        if (state.filterSpeakerId === sp.id) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+
+function doFind() {
+    const input = document.getElementById('findInput');
+    const countEl = document.getElementById('findCount');
+    if (!input || !countEl) return;
+    const keyword = input.value.trim();
+    state.findMatches = [];
+    state.currentFindIndex = -1;
+    if (!keyword) {
+        countEl.textContent = '';
+        renderTranscript();
+        return;
+    }
+    const kw = keyword.toLowerCase();
+    state.utterances.forEach((utt, uIdx) => {
+        const text = utt.text.toLowerCase();
+        let from = 0;
+        while (true) {
+            const pos = text.indexOf(kw, from);
+            if (pos < 0) break;
+            state.findMatches.push({ uttIndex: uIdx, uttId: utt.id, start: pos, end: pos + keyword.length });
+            from = pos + keyword.length;
+        }
+    });
+    countEl.textContent = state.findMatches.length > 0 ? `${state.findMatches.length} 处` : '无匹配';
+    if (state.findMatches.length > 0) {
+        state.currentFindIndex = 0;
+        scrollToMatch(state.currentFindIndex);
+    }
+    renderTranscript();
+}
+
+function findNext() {
+    if (state.findMatches.length === 0) { doFind(); return; }
+    state.currentFindIndex = (state.currentFindIndex + 1) % state.findMatches.length;
+    scrollToMatch(state.currentFindIndex);
+    renderTranscript();
+}
+
+function findPrev() {
+    if (state.findMatches.length === 0) { doFind(); return; }
+    state.currentFindIndex = (state.currentFindIndex - 1 + state.findMatches.length) % state.findMatches.length;
+    scrollToMatch(state.currentFindIndex);
+    renderTranscript();
+}
+
+function scrollToMatch(idx) {
+    const m = state.findMatches[idx];
+    if (!m) return;
+    state.selectedUtteranceId = m.uttId;
+    const container = document.getElementById('transcriptContent');
+    if (container) {
+        const el = container.querySelector(`[data-utterance-id="${m.uttId}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function highlightTextWithMatches(text, uttId) {
+    if (state.findMatches.length === 0) return escapeHtml(text);
+    const matches = state.findMatches
+        .filter(m => m.uttId === uttId)
+        .sort((a, b) => a.start - b.start);
+    if (matches.length === 0) return escapeHtml(text);
+    const ranges = matches.map((m, i) => ({ ...m, isCurrent: state.findMatches.indexOf(m) === state.currentFindIndex }));
+    let html = '';
+    let cursor = 0;
+    ranges.forEach(r => {
+        if (r.start > cursor) html += escapeHtml(text.substring(cursor, r.start));
+        html += `<span class="hl${r.isCurrent ? ' current' : ''}">${escapeHtml(text.substring(r.start, r.end))}</span>`;
+        cursor = r.end;
+    });
+    if (cursor < text.length) html += escapeHtml(text.substring(cursor));
+    return html;
+}
+
+function replaceOne() {
+    if (state.currentFindIndex < 0 || state.findMatches.length === 0) { doFind(); return; }
+    const replaceVal = document.getElementById('replaceInput').value;
+    const m = state.findMatches[state.currentFindIndex];
+    const utt = state.utterances.find(u => u.id === m.uttId);
+    if (!utt) return;
+    pushHistory();
+    utt.text = utt.text.substring(0, m.start) + replaceVal + utt.text.substring(m.end);
+    updateQuotesAfterUttChange(utt.id);
+    updateChaptersAfterUttChange();
+    renderAllFromState();
+    showToast('已替换 1 处');
+}
+
+function replaceAll() {
+    const findVal = document.getElementById('findInput').value.trim();
+    const replaceVal = document.getElementById('replaceInput').value;
+    if (!findVal) return;
+    const matchedUttIds = new Set();
+    pushHistory();
+    let count = 0;
+    state.utterances.forEach(utt => {
+        if (utt.text.includes(findVal)) {
+            matchedUttIds.add(utt.id);
+            const before = utt.text;
+            utt.text = utt.text.split(findVal).join(replaceVal);
+            count += (before.match(new RegExp(findVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+        }
+    });
+    matchedUttIds.forEach(id => updateQuotesAfterUttChange(id));
+    updateChaptersAfterUttChange();
+    renderAllFromState();
+    showToast(`已替换 ${count} 处`);
+}
+
+function applySpeakerFilter() {
+    const sel = document.getElementById('filterSpeaker');
+    if (!sel) return;
+    const val = sel.value;
+    state.filterSpeakerId = val === '' ? null : parseInt(val);
+    renderTranscript();
+}
+
+/* ==========================================================================
    初始化 & 事件绑定
    ========================================================================== */
 function init() {
@@ -124,6 +438,15 @@ function init() {
     bindTimelineClick();
     bindTimelineScrollSync();
 
+    if (loadProjectFromStorage() && state.utterances.length > 0) {
+        document.getElementById('uploadZone').style.display = 'none';
+        document.getElementById('workspace').style.display = '';
+        renderAllFromState();
+        updatePlayhead();
+        setTimeout(() => showToast('已恢复上次编辑的项目'), 400);
+        return;
+    }
+
     renderSpeakers();
     renderTimeline();
     renderTranscript();
@@ -131,6 +454,7 @@ function init() {
     renderChapters();
     renderViewpoints();
     updatePlayhead();
+    populateFilterSpeakerSelect();
 
     setTimeout(() => {
         showToast('将音频文件拖入页面开始整理，也可同时拖入 SRT/VTT/JSON 转写稿');
@@ -209,6 +533,26 @@ function bindEvents() {
         if (e.key === 'Escape') {
             hideQuoteFloatBar();
         }
+        const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT';
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'z' && !e.shiftKey) {
+                if (!inInput || e.target.closest('.find-replace-bar')) {
+                    e.preventDefault(); undo();
+                }
+            } else if ((e.key === 'y') || (e.key === 'z' && e.shiftKey)) {
+                if (!inInput || e.target.closest('.find-replace-bar')) {
+                    e.preventDefault(); redo();
+                }
+            } else if (e.key === 's') {
+                e.preventDefault(); saveProjectToStorage();
+            } else if (e.key === 'f' && !inInput) {
+                e.preventDefault();
+                document.getElementById('findInput')?.focus();
+            }
+        } else if (e.key === 'F3') {
+            e.preventDefault();
+            if (e.shiftKey) findPrev(); else findNext();
+        }
     });
 
     const audio = document.getElementById('audioPlayer');
@@ -217,6 +561,29 @@ function bindEvents() {
     audio.addEventListener('ended', () => { state.isPlaying = false; document.getElementById('playIcon').textContent = '▶'; });
     audio.addEventListener('play', () => { state.isPlaying = true; document.getElementById('playIcon').textContent = '⏸'; });
     audio.addEventListener('pause', () => { state.isPlaying = false; document.getElementById('playIcon').textContent = '▶'; });
+
+    document.getElementById('undoBtn')?.addEventListener('click', undo);
+    document.getElementById('redoBtn')?.addEventListener('click', redo);
+    document.getElementById('saveProjectBtn')?.addEventListener('click', saveProjectToStorage);
+    document.getElementById('exportProjectBtn')?.addEventListener('click', exportProjectFile);
+    document.getElementById('importProjectBtn')?.addEventListener('click', () => document.getElementById('projectInput').click());
+    document.getElementById('projectInput')?.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) importProjectFile(e.target.files[0]);
+        e.target.value = '';
+    });
+
+    document.getElementById('findInput')?.addEventListener('input', doFind);
+    document.getElementById('findNextBtn')?.addEventListener('click', findNext);
+    document.getElementById('findPrevBtn')?.addEventListener('click', findPrev);
+    document.getElementById('replaceOneBtn')?.addEventListener('click', replaceOne);
+    document.getElementById('replaceAllBtn')?.addEventListener('click', replaceAll);
+    document.getElementById('filterSpeaker')?.addEventListener('change', applySpeakerFilter);
+    document.getElementById('clearFilterBtn')?.addEventListener('click', () => {
+        state.filterSpeakerId = null;
+        const sel = document.getElementById('filterSpeaker');
+        if (sel) sel.value = '';
+        renderTranscript();
+    });
 }
 
 /* ==========================================================================
@@ -263,6 +630,7 @@ function handleTranscriptFileSelect(e) {
 function handleAudioFile(file) {
     state.audioFile = file;
     state.audioLoaded = true;
+    state.fileName = file.name;
     if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
     state.audioUrl = URL.createObjectURL(file);
     document.getElementById('audioPlayer').src = state.audioUrl;
@@ -341,6 +709,12 @@ function loadTranscriptFile(file) {
                 if (maxEnd > 0 && state.duration === 0) state.duration = maxEnd + 10;
                 state.transcriptFile = file;
                 state.transcriptLoaded = true;
+                state.transcriptName = file.name;
+                const tnEl = document.getElementById('transcriptName');
+                if (tnEl) {
+                    tnEl.textContent = '📄 ' + file.name;
+                    tnEl.style.display = '';
+                }
                 showToast(`转写稿已解析：${state.utterances.length} 句发言`);
                 if (document.getElementById('autoSegment').checked && state.chapters.length === 0) {
                     autoGenerateChapters();
@@ -758,8 +1132,17 @@ function renderSpeakers() {
             input.focus();
             input.select();
             input.addEventListener('blur', () => {
+                pushHistory();
                 speaker.name = input.value.trim() || '说话人' + (speaker.id + 1);
                 renderSpeakers(); renderTimeline(); renderTranscript();
+                populateFilterSpeakerSelect();
+                updateQuotesAfterUttChange(-1);
+                state.quotes.forEach(q => {
+                    const sp = state.speakers.find(s => s.id === q.speakerId);
+                    if (sp) q.speakerName = sp.name;
+                });
+                renderQuotes();
+                debounceRenderShownotesPreview();
             });
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
         });
@@ -772,6 +1155,7 @@ function renderSpeakers() {
         });
         container.appendChild(item);
     });
+    populateFilterSpeakerSelect();
 }
 
 function getSpeakerTotalDuration(speakerId) {
@@ -780,6 +1164,7 @@ function getSpeakerTotalDuration(speakerId) {
 }
 
 function addSpeaker() {
+    pushHistory();
     const newId = state.speakers.length > 0
         ? Math.max(...state.speakers.map(s => s.id)) + 1 : 0;
     state.speakers.push({
@@ -792,8 +1177,16 @@ function addSpeaker() {
 function reassignSpeaker(utteranceId, newSpeakerId) {
     const utterance = state.utterances.find(u => u.id === utteranceId);
     if (utterance) {
+        pushHistory();
         utterance.speakerId = newSpeakerId;
+        const sp = state.speakers.find(s => s.id === newSpeakerId);
+        utterance.speakerName = sp ? sp.name : null;
+        updateQuotesAfterUttChange(utteranceId);
+        updateChaptersAfterUttChange();
         renderSpeakers(); renderTimeline(); renderTranscript();
+        renderQuotes(); renderChapters(); renderViewpoints();
+        debounceRenderShownotesPreview();
+        showToast('已重新分配说话人');
     }
 }
 
@@ -806,6 +1199,7 @@ function renderTranscript() {
     state.utterances.forEach(utterance => {
         const speaker = state.speakers.find(s => s.id === utterance.speakerId);
         if (!speaker) return;
+        if (state.filterSpeakerId != null && utterance.speakerId !== state.filterSpeakerId) return;
         const el = document.createElement('div');
         el.className = 'utterance';
         el.draggable = true;
@@ -823,7 +1217,7 @@ function renderTranscript() {
                     <span class="utterance-speaker">${escapeHtml(speaker.name)}</span>
                     ${timeDisplay}
                 </div>
-                <div class="utterance-text" data-utt-id="${utterance.id}">${escapeHtml(utterance.text)}</div>
+                <div class="utterance-text" data-utt-id="${utterance.id}">${highlightTextWithMatches(utterance.text, utterance.id)}</div>
                 <div class="utterance-actions">
                     <button class="utterance-action-btn" title="编辑" data-action="edit">✏️</button>
                     <button class="utterance-action-btn" title="添加到金句" data-action="quote">⭐</button>
@@ -980,6 +1374,8 @@ function saveUtteranceEdit(uttId, panel) {
     if (isNaN(startTime) || isNaN(endTime)) { showToast('时间格式不正确', 'error'); return; }
     if (endTime <= startTime) { showToast('结束时间必须大于开始时间', 'error'); return; }
 
+    pushHistory();
+
     utt.speakerId = spId;
     utt.startTime = Math.max(0, startTime);
     utt.endTime = Math.min(state.duration || endTime, endTime);
@@ -1012,6 +1408,8 @@ function splitUtterance(uttId, panel) {
         showToast('拆分后两边都不能为空', 'error');
         return;
     }
+
+    pushHistory();
 
     const midTime = utt.startTime + (utt.endTime - utt.startTime) * (cursorPos / fullText.length);
     const idx = state.utterances.findIndex(u => u.id === uttId);
@@ -1054,11 +1452,26 @@ function mergeUtterance(uttId, direction) {
         return;
     }
 
+    pushHistory();
+
     const first = direction === 'prev' ? state.utterances[targetIdx] : state.utterances[idx];
     const second = direction === 'prev' ? state.utterances[idx] : state.utterances[targetIdx];
 
     first.text = first.text + second.text;
     first.endTime = second.endTime;
+
+    state.chapters.forEach(ch => {
+        if (ch.utteranceIds) {
+            const idx2 = ch.utteranceIds.indexOf(second.id);
+            if (idx2 >= 0) {
+                if (ch.utteranceIds.includes(first.id)) {
+                    ch.utteranceIds.splice(idx2, 1);
+                } else {
+                    ch.utteranceIds[idx2] = first.id;
+                }
+            }
+        }
+    });
 
     state.utterances.splice(targetIdx > idx ? targetIdx : idx, 1);
 
@@ -1165,6 +1578,7 @@ function updateMultiSelectUI() {
 function createChapterFromMultiSelect() {
     const ids = Array.from(state.multiSelectedIds).sort((a, b) => a - b);
     if (ids.length === 0) return;
+    pushHistory();
     const selectedUtts = ids
         .map(id => state.utterances.find(u => u.id === id))
         .filter(Boolean)
@@ -1296,6 +1710,7 @@ function addQuote(utterance, partialText) {
         ((q.isPartial && q.text === finalText) || (!q.isPartial && !isPartial))
     );
     if (exists) return;
+    pushHistory();
     const speaker = state.speakers.find(s => s.id === utterance.speakerId);
     const speakerName = speaker ? speaker.name : (utterance.speakerName || `说话人${utterance.speakerId + 1}`);
     state.quotes.push({
@@ -1333,6 +1748,7 @@ function renderQuotes() {
             });
             el.querySelector('.quote-delete').addEventListener('click', (e) => {
                 e.stopPropagation();
+                pushHistory();
                 state.quotes = state.quotes.filter(q => String(q.id) !== String(quote.id));
                 renderQuotes(); updateQuoteCount();
             });
@@ -1440,6 +1856,7 @@ function handleChapterAction(action, index) {
         case 'refresh': refreshChapterContent(chapter); break;
         case 'delete':
             if (confirm('确定删除这个章节吗？')) {
+                pushHistory();
                 state.chapters.splice(index, 1);
                 renderChapters();
             }
@@ -1477,6 +1894,7 @@ function refreshChapterContent(chapter) {
 }
 
 function addChapter() {
+    pushHistory();
     const newChapter = {
         title: '新章节', startTime: state.currentTime || 0,
         summary: '点击编辑章节摘要，或多选句子后自动合成...',

@@ -1505,3 +1505,78 @@ body.multi-select-mode .utterance {
         display: none;
     }
 }
+
+/* 查找替换工具栏 */
+.find-replace-bar {
+    display: flex;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-light);
+    border-bottom: 1px solid var(--border-light);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.find-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.input-sm {
+    padding: 5px 10px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    outline: none;
+    transition: border-color 0.15s;
+    font-family: inherit;
+    color: var(--text-primary);
+    min-width: 140px;
+}
+
+.input-sm:focus {
+    border-color: var(--primary);
+}
+
+.btn-xs {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    min-height: 28px;
+}
+
+.find-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    min-width: 50px;
+    text-align: center;
+}
+
+/* 查找高亮 */
+.utterance-text .hl {
+    background: #fef08a;
+    color: var(--text-primary);
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+.utterance-text .hl.current {
+    background: #fbbf24;
+    color: #78350f;
+    font-weight: 600;
+}
+
+/* 撤销/重做按钮状态 */
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 转写文本筛选 */
+.utterance.speaker-filtered {
+    display: none;
+}
+
