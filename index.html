@@ -16,6 +16,8 @@
             </div>
             <div class="header-actions">
                 <span class="file-name" id="fileName">未导入音频</span>
+                <span class="file-name" id="transcriptName" style="display:none;"></span>
+                <button class="btn btn-outline" id="importTranscriptBtn">📄 导入转写稿</button>
                 <button class="btn btn-primary" id="importBtn">导入音频</button>
             </div>
         </header>
@@ -25,8 +27,11 @@
             <div class="upload-content">
                 <div class="upload-icon">📁</div>
                 <h2>拖拽音频文件到这里</h2>
-                <p>支持 MP3、WAV、M4A 格式，文件将在本地处理，不会上传到服务器</p>
-                <button class="btn btn-outline" id="selectFileBtn">选择文件</button>
+                <p>支持 MP3、WAV、M4A 格式，可同时导入 SRT/VTT/JSON 转写稿</p>
+                <p class="upload-tip">💡 没有转写稿也可以，系统会自动生成示例对话供你体验完整功能</p>
+                <div class="upload-btns">
+                    <button class="btn btn-outline" id="selectFileBtn">选择音频文件</button>
+                </div>
             </div>
         </div>
 
@@ -48,8 +53,11 @@
                         <span>⭐</span> 金句摘录
                         <span class="badge" id="quoteCount">0</span>
                     </h3>
+                    <div class="quote-tip">
+                        <span class="hint">💡 框选句子中的部分文字可精准摘录</span>
+                    </div>
                     <div class="quote-list" id="quoteList">
-                        <div class="empty-state">选中文字添加摘录</div>
+                        <div class="empty-state">选中或框选文字添加摘录</div>
                     </div>
                     <button class="btn btn-outline btn-sm" id="exportQuotesBtn">导出摘录</button>
                 </div>
@@ -73,8 +81,13 @@
                         </div>
                     </div>
                     <div class="timeline-container" id="timelineContainer">
-                        <div class="timeline-ruler" id="timelineRuler"></div>
-                        <div class="timeline-track" id="timelineTrack">
+                        <div class="timeline-scroll" id="timelineScroll">
+                            <div class="timeline-inner" id="timelineInner">
+                                <div class="timeline-ruler" id="timelineRuler"></div>
+                                <div class="timeline-track" id="timelineTrack">
+                                    <div class="timeline-track-inner" id="timelineTrackInner"></div>
+                                </div>
+                            </div>
                         </div>
                         <div class="playhead" id="playhead" style="left: 0;"></div>
                     </div>
@@ -115,7 +128,16 @@
                 <div class="tab-content active" id="transcriptTab">
                     <div class="transcript-header">
                         <div class="transcript-tools">
-                            <span class="hint">💡 拖拽句子到左侧说话人可重新分配</span>
+                            <span class="hint">💡 拖拽句子到左侧说话人可重新分配 · 框选文字可精准摘录</span>
+                            <div class="select-tools">
+                                <button class="btn btn-outline btn-sm" id="multiSelectToggle" title="多选模式">
+                                    <span>☐</span> 多选模式
+                                </button>
+                                <button class="btn btn-primary btn-sm" id="makeChapterBtn" style="display:none;">
+                                    📑 合成章节
+                                </button>
+                                <span class="selected-count" id="selectedCount" style="display:none;"></span>
+                            </div>
                         </div>
                     </div>
                     <div class="transcript-content" id="transcriptContent">
@@ -127,6 +149,7 @@
                     <div class="chapters-header">
                         <button class="btn btn-primary btn-sm" id="addChapterBtn">+ 添加章节</button>
                         <button class="btn btn-outline btn-sm" id="generateSummaryBtn">✨ 生成节目简介</button>
+                        <button class="btn btn-outline btn-sm" id="exportShownotesBtn">📤 导出 Shownotes</button>
                     </div>
                     <div class="chapters-content" id="chaptersContent">
                     </div>
@@ -171,6 +194,10 @@
                         <label>显示时间戳</label>
                         <input type="checkbox" id="showTimestamps" checked>
                     </div>
+                    <div class="setting-item">
+                        <label>自动滚动跟随</label>
+                        <input type="checkbox" id="autoScroll" checked>
+                    </div>
                 </div>
             </aside>
         </div>
@@ -181,13 +208,22 @@
 
     <!-- 隐藏的文件输入 -->
     <input type="file" id="fileInput" accept="audio/*" style="display: none;">
+    <input type="file" id="transcriptInput" accept=".srt,.vtt,.json,text/plain" style="display: none;">
 
     <!-- 右键菜单 -->
     <div class="context-menu" id="contextMenu" style="display: none;">
         <div class="context-menu-item" data-action="quote">⭐ 添加到金句摘录</div>
-        <div class="context-menu-item" data-action="chapter">📑 新建章节</div>
+        <div class="context-menu-item" data-action="chapter">📑 从此处新建章节</div>
         <div class="context-sep"></div>
         <div class="context-menu-item" data-action="copy">📋 复制文本</div>
+        <div class="context-menu-item" data-action="copyWithTime">🕐 复制带时间戳</div>
+    </div>
+
+    <!-- 浮动摘录提示条 -->
+    <div class="quote-float-bar" id="quoteFloatBar" style="display: none;">
+        <span class="quote-preview" id="quotePreview"></span>
+        <button class="btn btn-outline btn-sm" id="cancelQuoteBtn">取消</button>
+        <button class="btn btn-primary btn-sm" id="confirmQuoteBtn">⭐ 加入摘录篮</button>
     </div>
 
     <script src="app.js"></script>
