@@ -108,6 +108,13 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function debounceRenderShownotesPreview() {
+    const preview = document.getElementById('shownotesPreview');
+    if (!preview || preview.style.display === 'none') return;
+    clearTimeout(debounceRenderShownotesPreview._t);
+    debounceRenderShownotesPreview._t = setTimeout(renderShownotesPreview, 150);
+}
+
 /* ==========================================================================
    初始化 & 事件绑定
    ========================================================================== */
@@ -170,6 +177,14 @@ function bindEvents() {
     document.getElementById('generateSummaryBtn').addEventListener('click', generateSummary);
     document.getElementById('generateViewpointsBtn').addEventListener('click', generateViewpoints);
     document.getElementById('exportShownotesBtn').addEventListener('click', exportShownotes);
+    document.getElementById('togglePreviewBtn').addEventListener('click', toggleShownotesPreview);
+    document.getElementById('copyShownotesBtn').addEventListener('click', copyShownotes);
+    document.getElementById('downloadShownotesBtn').addEventListener('click', downloadShownotesMarkdown);
+
+    const epTitle = document.getElementById('episodeTitle');
+    const epDesc = document.getElementById('episodeDesc');
+    if (epTitle) epTitle.addEventListener('input', debounceRenderShownotesPreview);
+    if (epDesc) epDesc.addEventListener('input', debounceRenderShownotesPreview);
 
     document.getElementById('showTimestamps').addEventListener('change', (e) => {
         state.showTimestamps = e.target.checked;
@@ -349,7 +364,7 @@ function parseSRT(content) {
         let timeIdx = 0;
         if (/^\d+$/.test(lines[0].trim())) timeIdx = 1;
         if (timeIdx >= lines.length) return;
-        const timeMatch = lines[timeIdx].match(/(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})/);
+        const timeMatch = lines[timeIdx].match(/((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})/);
         if (!timeMatch) return;
         const startTime = parseTimestampToSeconds(timeMatch[1]);
         const endTime = parseTimestampToSeconds(timeMatch[2]);
@@ -384,7 +399,7 @@ function parseVTT(content) {
         let timeIdx = -1;
         for (let i = 0; i < lines.length; i++) if (lines[i].includes('-->')) { timeIdx = i; break; }
         if (timeIdx < 0) return;
-        const timeMatch = lines[timeIdx].match(/(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})/);
+        const timeMatch = lines[timeIdx].match(/((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})/);
         if (!timeMatch) return;
         const startTime = parseTimestampToSeconds(timeMatch[1]);
         const endTime = parseTimestampToSeconds(timeMatch[2]);
@@ -415,36 +430,91 @@ function parseVTT(content) {
 
 function parseJSONTranscript(content) {
     const data = JSON.parse(content);
-    if (Array.isArray(data)) {
-        return {
-            utterances: data.map(item => ({
-                speakerId: item.speaker_id ?? item.speakerId ?? item.speaker ?? 0,
-                speakerName: item.speaker_name ?? item.speakerName ?? null,
+
+    function normalizeUtterances(items) {
+        const nameToId = new Map();
+        let nextId = 0;
+        const utterances = items.map(item => {
+            let rawSpeakerId = item.speaker_id ?? item.speakerId ?? item.speaker;
+            let speakerName = item.speaker_name ?? item.speakerName ?? null;
+            let speakerId = 0;
+
+            if (rawSpeakerId != null && rawSpeakerId !== '') {
+                if (typeof rawSpeakerId === 'number' || !isNaN(Number(rawSpeakerId))) {
+                    speakerId = Number(rawSpeakerId);
+                    if (speakerName && !nameToId.has(speakerName)) {
+                        nameToId.set(speakerName, speakerId);
+                    }
+                } else {
+                    const nameStr = String(rawSpeakerId).trim();
+                    if (!speakerName) speakerName = nameStr;
+                    if (nameToId.has(nameStr)) {
+                        speakerId = nameToId.get(nameStr);
+                    } else {
+                        while (Array.from(nameToId.values()).includes(nextId)) nextId++;
+                        speakerId = nextId;
+                        nameToId.set(nameStr, speakerId);
+                        nextId++;
+                    }
+                }
+            }
+
+            if (speakerName && !nameToId.has(speakerName)) {
+                if (typeof rawSpeakerId === 'number' || (rawSpeakerId != null && !isNaN(Number(rawSpeakerId)))) {
+                    nameToId.set(speakerName, Number(rawSpeakerId));
+                }
+            }
+
+            return {
+                speakerId,
+                speakerName,
                 text: item.text ?? item.content ?? item.utterance ?? '',
-                startTime: item.start ?? item.start_time ?? item.startTime ?? 0,
-                endTime: item.end ?? item.end_time ?? item.endTime ?? 5
-            })),
-            speakers: []
-        };
+                startTime: parseTimestampToSeconds(item.start ?? item.start_time ?? item.startTime ?? 0),
+                endTime: parseTimestampToSeconds(item.end ?? item.end_time ?? item.endTime ?? 5)
+            };
+        });
+
+        const idToName = new Map();
+        utterances.forEach(u => {
+            if (u.speakerName && !idToName.has(u.speakerId)) {
+                idToName.set(u.speakerId, u.speakerName);
+            }
+        });
+
+        const speakers = [];
+        const addedIds = new Set();
+        utterances.forEach(u => {
+            if (!addedIds.has(u.speakerId)) {
+                addedIds.add(u.speakerId);
+                const name = idToName.get(u.speakerId) || `说话人${u.speakerId + 1}`;
+                speakers.push({ id: u.speakerId, name });
+            }
+        });
+        speakers.sort((a, b) => a.id - b.id);
+        if (speakers.length === 0) speakers.push({ id: 0, name: '说话人1' });
+        return { utterances, speakers };
+    }
+
+    if (Array.isArray(data)) {
+        return normalizeUtterances(data);
     }
     if (data && Array.isArray(data.segments)) {
-        const speakers = [];
-        if (Array.isArray(data.speakers)) {
-            data.speakers.forEach((s, i) => speakers.push({ id: s.id ?? i, name: s.name ?? s.label ?? `说话人${i + 1}` }));
+        const result = normalizeUtterances(data.segments);
+        if (Array.isArray(data.speakers) && data.speakers.length > 0) {
+            const existingMap = new Map(result.speakers.map(s => [s.id, s]));
+            data.speakers.forEach((s, i) => {
+                const id = s.id ?? i;
+                if (existingMap.has(id)) {
+                    existingMap.get(id).name = s.name ?? s.label ?? existingMap.get(id).name;
+                } else {
+                    result.speakers.push({ id, name: s.name ?? s.label ?? `说话人${i + 1}` });
+                }
+            });
         }
-        return {
-            utterances: data.segments.map((item) => ({
-                speakerId: item.speaker_id ?? item.speakerId ?? item.speaker ?? 0,
-                speakerName: item.speaker_name ?? item.speakerName ?? null,
-                text: item.text ?? item.content ?? '',
-                startTime: item.start ?? item.start_time ?? item.startTime ?? 0,
-                endTime: item.end ?? item.end_time ?? item.endTime ?? 5
-            })),
-            speakers
-        };
+        return result;
     }
     if (data && Array.isArray(data.utterances)) {
-        return parseJSONTranscript(JSON.stringify(data.utterances));
+        return normalizeUtterances(data.utterances);
     }
     throw new Error('JSON 格式不支持');
 }
@@ -755,9 +825,38 @@ function renderTranscript() {
                 </div>
                 <div class="utterance-text" data-utt-id="${utterance.id}">${escapeHtml(utterance.text)}</div>
                 <div class="utterance-actions">
+                    <button class="utterance-action-btn" title="编辑" data-action="edit">✏️</button>
                     <button class="utterance-action-btn" title="添加到金句" data-action="quote">⭐</button>
                     <button class="utterance-action-btn" title="从此处新建章节" data-action="chapter">📑</button>
                     <button class="utterance-action-btn" title="复制" data-action="copy">📋</button>
+                </div>
+                <div class="utterance-edit-panel" style="display:none;" data-utt-id="${utterance.id}">
+                    <div class="edit-row">
+                        <label>说话人</label>
+                        <select class="edit-speaker">
+                            ${state.speakers.map(sp =>
+                                `<option value="${sp.id}" ${sp.id === utterance.speakerId ? 'selected' : ''}>${escapeHtml(sp.name)}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="edit-row edit-time">
+                        <label>开始时间</label>
+                        <input type="text" class="edit-start-time" value="${formatTime(utterance.startTime)}" placeholder="00:00:00">
+                        <label>结束时间</label>
+                        <input type="text" class="edit-end-time" value="${formatTime(utterance.endTime)}" placeholder="00:00:00">
+                    </div>
+                    <div class="edit-row">
+                        <label>文本内容</label>
+                        <textarea class="edit-text" rows="3">${escapeHtml(utterance.text)}</textarea>
+                    </div>
+                    <div class="edit-actions">
+                        <button class="btn btn-primary btn-sm edit-save-btn">💾 保存</button>
+                        <button class="btn btn-outline btn-sm edit-cancel-btn">取消</button>
+                        <div class="edit-spacer"></div>
+                        <button class="btn btn-outline btn-sm edit-split-btn" title="在光标位置拆分为两句">✂️ 拆分</button>
+                        <button class="btn btn-outline btn-sm edit-merge-prev-btn" title="与上一句合并">⬆️ 合并上句</button>
+                        <button class="btn btn-outline btn-sm edit-merge-next-btn" title="与下一句合并">⬇️ 合并下句</button>
+                    </div>
                 </div>
             </div>`;
         el.addEventListener('dragstart', (e) => {
@@ -798,6 +897,32 @@ function renderTranscript() {
         el.querySelector('[data-action="copy"]').addEventListener('click', (e) => {
             e.stopPropagation(); navigator.clipboard.writeText(utterance.text);
         });
+        el.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleEditPanel(utterance.id, el);
+        });
+        const editPanel = el.querySelector('.utterance-edit-panel');
+        editPanel.addEventListener('click', (e) => e.stopPropagation());
+        editPanel.querySelector('.edit-save-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            saveUtteranceEdit(utterance.id, editPanel);
+        });
+        editPanel.querySelector('.edit-cancel-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            editPanel.style.display = 'none';
+        });
+        editPanel.querySelector('.edit-split-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            splitUtterance(utterance.id, editPanel);
+        });
+        editPanel.querySelector('.edit-merge-prev-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            mergeUtterance(utterance.id, 'prev');
+        });
+        editPanel.querySelector('.edit-merge-next-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            mergeUtterance(utterance.id, 'next');
+        });
         el.querySelector('.utterance-checkbox').addEventListener('change', (e) => {
             toggleMultiSelectOne(utterance.id, e.target.checked);
         });
@@ -831,6 +956,146 @@ function selectUtterance(id, autoScroll = false) {
             }
         }
     }
+}
+
+/* ---------- 编辑功能 ---------- */
+function toggleEditPanel(uttId, el) {
+    const panel = el.querySelector('.utterance-edit-panel');
+    const isOpen = panel.style.display !== 'none';
+    document.querySelectorAll('.utterance-edit-panel').forEach(p => {
+        if (p !== panel) p.style.display = 'none';
+    });
+    panel.style.display = isOpen ? 'none' : 'block';
+}
+
+function saveUtteranceEdit(uttId, panel) {
+    const utt = state.utterances.find(u => u.id === uttId);
+    if (!utt) return;
+    const spId = parseInt(panel.querySelector('.edit-speaker').value);
+    const startTime = parseTimestampToSeconds(panel.querySelector('.edit-start-time').value);
+    const endTime = parseTimestampToSeconds(panel.querySelector('.edit-end-time').value);
+    const text = panel.querySelector('.edit-text').value.trim();
+
+    if (!text) { showToast('文本不能为空', 'error'); return; }
+    if (isNaN(startTime) || isNaN(endTime)) { showToast('时间格式不正确', 'error'); return; }
+    if (endTime <= startTime) { showToast('结束时间必须大于开始时间', 'error'); return; }
+
+    utt.speakerId = spId;
+    utt.startTime = Math.max(0, startTime);
+    utt.endTime = Math.min(state.duration || endTime, endTime);
+    utt.text = text;
+
+    updateQuotesAfterUttChange(uttId);
+    updateChaptersAfterUttChange();
+
+    renderSpeakers(); renderTimeline(); renderTranscript();
+    renderQuotes(); renderChapters(); renderViewpoints();
+    debounceRenderShownotesPreview();
+    showToast('修改已保存');
+}
+
+function splitUtterance(uttId, panel) {
+    const utt = state.utterances.find(u => u.id === uttId);
+    if (!utt) return;
+    const textarea = panel.querySelector('.edit-text');
+    const cursorPos = textarea.selectionStart;
+    const fullText = textarea.value;
+
+    if (cursorPos === 0 || cursorPos === fullText.length) {
+        showToast('请先在文本中点击选择拆分位置', 'error');
+        return;
+    }
+
+    const leftText = fullText.substring(0, cursorPos).trim();
+    const rightText = fullText.substring(cursorPos).trim();
+    if (!leftText || !rightText) {
+        showToast('拆分后两边都不能为空', 'error');
+        return;
+    }
+
+    const midTime = utt.startTime + (utt.endTime - utt.startTime) * (cursorPos / fullText.length);
+    const idx = state.utterances.findIndex(u => u.id === uttId);
+    if (idx < 0) return;
+
+    const newUtt = {
+        id: Date.now() + Math.random(),
+        speakerId: utt.speakerId,
+        speakerName: utt.speakerName || null,
+        text: rightText,
+        startTime: midTime,
+        endTime: utt.endTime
+    };
+
+    utt.text = leftText;
+    utt.endTime = midTime;
+    state.utterances.splice(idx + 1, 0, newUtt);
+
+    updateChaptersAfterUttChange();
+
+    renderSpeakers(); renderTimeline(); renderTranscript();
+    renderChapters();
+    debounceRenderShownotesPreview();
+    showToast('已拆分为两句');
+}
+
+function mergeUtterance(uttId, direction) {
+    const idx = state.utterances.findIndex(u => u.id === uttId);
+    if (idx < 0) return;
+    const targetIdx = direction === 'prev' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= state.utterances.length) {
+        showToast('没有可合并的句子', 'error');
+        return;
+    }
+
+    const first = direction === 'prev' ? state.utterances[targetIdx] : state.utterances[idx];
+    const second = direction === 'prev' ? state.utterances[idx] : state.utterances[targetIdx];
+
+    first.text = first.text + second.text;
+    first.endTime = second.endTime;
+
+    state.utterances.splice(targetIdx > idx ? targetIdx : idx, 1);
+
+    updateQuotesAfterUttChange(second.id, first.id);
+    updateChaptersAfterUttChange();
+
+    renderSpeakers(); renderTimeline(); renderTranscript();
+    renderQuotes(); renderChapters(); renderViewpoints();
+    debounceRenderShownotesPreview();
+    showToast('已合并两句');
+}
+
+function updateQuotesAfterUttChange(oldUttId, newUttId = null) {
+    state.quotes.forEach(q => {
+        if (q.utteranceId === oldUttId) {
+            if (newUttId != null) {
+                q.utteranceId = newUttId;
+            }
+            const utt = state.utterances.find(u => u.id === (newUttId != null ? newUttId : oldUttId));
+            if (utt) {
+                const sp = state.speakers.find(s => s.id === utt.speakerId);
+                q.speakerName = sp ? sp.name : q.speakerName;
+                q.color = sp ? sp.color : q.color;
+                if (!q.isPartial) {
+                    q.text = utt.text;
+                    q.endTime = utt.endTime;
+                }
+            }
+        }
+    });
+    updateQuoteCount();
+}
+
+function updateChaptersAfterUttChange() {
+    state.chapters.forEach(ch => {
+        if (ch.utteranceIds && ch.utteranceIds.length > 0) {
+            const validIds = ch.utteranceIds.filter(id => state.utterances.some(u => u.id === id));
+            if (validIds.length > 0) {
+                const utts = validIds.map(id => state.utterances.find(u => u.id === id)).filter(Boolean);
+                ch.startTime = Math.min(...utts.map(u => u.startTime));
+                ch.endTime = Math.max(...utts.map(u => u.endTime));
+            }
+        }
+    });
 }
 
 /* ---------- 多选模式 ---------- */
@@ -1010,11 +1275,12 @@ function addQuote(utterance, partialText) {
     );
     if (exists) return;
     const speaker = state.speakers.find(s => s.id === utterance.speakerId);
+    const speakerName = speaker ? speaker.name : (utterance.speakerName || `说话人${utterance.speakerId + 1}`);
     state.quotes.push({
         id: Date.now() + Math.random(),
         utteranceId: utterance.id,
         text: finalText,
-        speakerName: speaker ? speaker.name : '未知',
+        speakerName,
         startTime: utterance.startTime,
         endTime: utterance.endTime,
         color: speaker ? speaker.color : '#999',
@@ -1027,30 +1293,31 @@ function renderQuotes() {
     const container = document.getElementById('quoteList');
     if (state.quotes.length === 0) {
         container.innerHTML = '<div class="empty-state">选中或框选文字添加摘录</div>';
-        return;
+    } else {
+        container.innerHTML = '';
+        state.quotes.forEach(quote => {
+            const el = document.createElement('div');
+            el.className = 'quote-item' + (quote.isPartial ? ' is-partial' : '');
+            el.innerHTML = `
+                <div class="quote-text">${escapeHtml(quote.text)}</div>
+                <div class="quote-meta">
+                    <span>${escapeHtml(quote.speakerName)} · ${formatTimeShort(quote.startTime)}</span>
+                    <span class="quote-delete" data-quote-id="${quote.id}">删除</span>
+                </div>`;
+            el.addEventListener('click', (e) => {
+                if (e.target.classList.contains('quote-delete')) return;
+                setCurrentTime(quote.startTime);
+                if (!state.isPlaying) togglePlay();
+            });
+            el.querySelector('.quote-delete').addEventListener('click', (e) => {
+                e.stopPropagation();
+                state.quotes = state.quotes.filter(q => String(q.id) !== String(quote.id));
+                renderQuotes(); updateQuoteCount();
+            });
+            container.appendChild(el);
+        });
     }
-    container.innerHTML = '';
-    state.quotes.forEach(quote => {
-        const el = document.createElement('div');
-        el.className = 'quote-item' + (quote.isPartial ? ' is-partial' : '');
-        el.innerHTML = `
-            <div class="quote-text">${escapeHtml(quote.text)}</div>
-            <div class="quote-meta">
-                <span>${escapeHtml(quote.speakerName)} · ${formatTimeShort(quote.startTime)}</span>
-                <span class="quote-delete" data-quote-id="${quote.id}">删除</span>
-            </div>`;
-        el.addEventListener('click', (e) => {
-            if (e.target.classList.contains('quote-delete')) return;
-            setCurrentTime(quote.startTime);
-            if (!state.isPlaying) togglePlay();
-        });
-        el.querySelector('.quote-delete').addEventListener('click', (e) => {
-            e.stopPropagation();
-            state.quotes = state.quotes.filter(q => String(q.id) !== String(quote.id));
-            renderQuotes(); updateQuoteCount();
-        });
-        container.appendChild(el);
-    });
+    debounceRenderShownotesPreview();
 }
 
 function updateQuoteCount() {
@@ -1084,56 +1351,59 @@ function renderChapters() {
     const container = document.getElementById('chaptersContent');
     if (state.chapters.length === 0) {
         container.innerHTML = '<div class="empty-state">还没有章节，可在"转写文本"中多选句子后点击"合成章节"</div>';
-        return;
-    }
-    container.innerHTML = '';
-    state.chapters.forEach((chapter, index) => {
-        const endTime = chapter.endTime ?? state.chapters[index + 1]?.startTime ?? state.duration;
-        const card = document.createElement('div');
-        card.className = 'chapter-card';
-        const speakersHtml = chapter.speakers && chapter.speakers.length
-            ? `<div class="chapter-speakers">
-                ${chapter.speakers.map(s => `<span class="chapter-speaker-tag" style="background:${s.color}">${escapeHtml(s.name)}</span>`).join('')}
-              </div>` : '';
-        card.innerHTML = `
-            <div class="chapter-header">
-                <div class="chapter-number">${index + 1}</div>
-                <input type="text" class="chapter-title" value="${escapeHtml(chapter.title)}" data-chapter-index="${index}">
-                <span class="chapter-time">${formatTimeShort(chapter.startTime)} - ${formatTimeShort(endTime)}</span>
-            </div>
-            ${speakersHtml}
-            <div class="chapter-summary">
-                <textarea rows="2" data-chapter-index="${index}" data-field="summary">${escapeHtml(chapter.summary || '')}</textarea>
-            </div>
-            <div class="chapter-keywords">
-                ${(chapter.keywords || []).map(k => `<span class="chapter-keyword">${escapeHtml(k)}</span>`).join('')}
-            </div>
-            <div class="chapter-actions">
-                <button class="chapter-action-btn" data-action="jump" data-chapter-index="${index}">🎧 试听</button>
-                <button class="chapter-action-btn" data-action="addViewpoint" data-chapter-index="${index}">💡 提取观点</button>
-                <button class="chapter-action-btn" data-action="refresh" data-chapter-index="${index}">🔄 重新生成</button>
-                <button class="chapter-action-btn delete" data-action="delete" data-chapter-index="${index}">删除</button>
-            </div>`;
-        card.querySelector('.chapter-title').addEventListener('change', (e) => {
-            chapter.title = e.target.value;
-        });
-        const textarea = card.querySelector('textarea');
-        textarea.addEventListener('input', (e) => {
-            chapter.summary = e.target.value;
-            e.target.style.height = 'auto';
-            e.target.style.height = e.target.scrollHeight + 'px';
-        });
-        setTimeout(() => {
-            textarea.style.height = 'auto';
-            textarea.style.height = textarea.scrollHeight + 'px';
-        }, 0);
-        card.querySelectorAll('.chapter-action-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                handleChapterAction(btn.dataset.action, parseInt(btn.dataset.chapterIndex));
+    } else {
+        container.innerHTML = '';
+        state.chapters.forEach((chapter, index) => {
+            const endTime = chapter.endTime ?? state.chapters[index + 1]?.startTime ?? state.duration;
+            const card = document.createElement('div');
+            card.className = 'chapter-card';
+            const speakersHtml = chapter.speakers && chapter.speakers.length
+                ? `<div class="chapter-speakers">
+                    ${chapter.speakers.map(s => `<span class="chapter-speaker-tag" style="background:${s.color}">${escapeHtml(s.name)}</span>`).join('')}
+                  </div>` : '';
+            card.innerHTML = `
+                <div class="chapter-header">
+                    <div class="chapter-number">${index + 1}</div>
+                    <input type="text" class="chapter-title" value="${escapeHtml(chapter.title)}" data-chapter-index="${index}">
+                    <span class="chapter-time">${formatTimeShort(chapter.startTime)} - ${formatTimeShort(endTime)}</span>
+                </div>
+                ${speakersHtml}
+                <div class="chapter-summary">
+                    <textarea rows="2" data-chapter-index="${index}" data-field="summary">${escapeHtml(chapter.summary || '')}</textarea>
+                </div>
+                <div class="chapter-keywords">
+                    ${(chapter.keywords || []).map(k => `<span class="chapter-keyword">${escapeHtml(k)}</span>`).join('')}
+                </div>
+                <div class="chapter-actions">
+                    <button class="chapter-action-btn" data-action="jump" data-chapter-index="${index}">🎧 试听</button>
+                    <button class="chapter-action-btn" data-action="addViewpoint" data-chapter-index="${index}">💡 提取观点</button>
+                    <button class="chapter-action-btn" data-action="refresh" data-chapter-index="${index}">🔄 重新生成</button>
+                    <button class="chapter-action-btn delete" data-action="delete" data-chapter-index="${index}">删除</button>
+                </div>`;
+            card.querySelector('.chapter-title').addEventListener('input', (e) => {
+                chapter.title = e.target.value;
+                debounceRenderShownotesPreview();
             });
+            const textarea = card.querySelector('textarea');
+            textarea.addEventListener('input', (e) => {
+                chapter.summary = e.target.value;
+                e.target.style.height = 'auto';
+                e.target.style.height = e.target.scrollHeight + 'px';
+                debounceRenderShownotesPreview();
+            });
+            setTimeout(() => {
+                textarea.style.height = 'auto';
+                textarea.style.height = textarea.scrollHeight + 'px';
+            }, 0);
+            card.querySelectorAll('.chapter-action-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    handleChapterAction(btn.dataset.action, parseInt(btn.dataset.chapterIndex));
+                });
+            });
+            container.appendChild(card);
         });
-        container.appendChild(card);
-    });
+    }
+    debounceRenderShownotesPreview();
 }
 
 function handleChapterAction(action, index) {
@@ -1335,25 +1605,26 @@ function renderViewpoints() {
     const container = document.getElementById('viewpointsList');
     if (state.viewpoints.length === 0) {
         container.innerHTML = '<div class="empty-state">从章节中提取观点，或一键生成</div>';
-        return;
-    }
-    container.innerHTML = '';
-    state.viewpoints.forEach(vp => {
-        const el = document.createElement('div');
-        el.className = 'viewpoint-item';
-        el.innerHTML = `
-            <div class="viewpoint-speaker" style="color: ${vp.color}">
-                <span class="speaker-dot" style="background: ${vp.color}"></span>
-                ${vp.speakerName} · <span class="viewpoint-time">${formatTime(vp.startTime)}</span>
-            </div>
-            <div class="viewpoint-text">${vp.text}</div>
-        `;
-        el.addEventListener('click', () => {
-            setCurrentTime(vp.startTime);
-            if (!state.isPlaying) togglePlay();
+    } else {
+        container.innerHTML = '';
+        state.viewpoints.forEach(vp => {
+            const el = document.createElement('div');
+            el.className = 'viewpoint-item';
+            el.innerHTML = `
+                <div class="viewpoint-speaker" style="color: ${vp.color}">
+                    <span class="speaker-dot" style="background: ${vp.color}"></span>
+                    ${vp.speakerName} · <span class="viewpoint-time">${formatTime(vp.startTime)}</span>
+                </div>
+                <div class="viewpoint-text">${vp.text}</div>
+            `;
+            el.addEventListener('click', () => {
+                setCurrentTime(vp.startTime);
+                if (!state.isPlaying) togglePlay();
+            });
+            container.appendChild(el);
         });
-        container.appendChild(el);
-    });
+    }
+    debounceRenderShownotesPreview();
 }
 
 function generateSummary() {
@@ -1386,17 +1657,28 @@ function generateSummary() {
 }
 
 function exportShownotes() {
+    const text = buildShownotesText();
+    const title = document.getElementById('episodeTitle').value || 'shownotes';
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[\\/:*?"<>|]/g, '_')}_shownotes.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Shownotes 已导出（Markdown 格式）');
+}
+
+function buildShownotesText() {
     const title = document.getElementById('episodeTitle').value || '未命名节目';
     const desc = document.getElementById('episodeDesc').value || '';
-
-    let lines = [];
+    const lines = [];
     lines.push(`# ${title}`);
     lines.push('');
     if (desc) {
         lines.push(desc);
         lines.push('');
     }
-
     if (state.chapters.length > 0) {
         lines.push('---');
         lines.push('## 📑 时间线 & 章节');
@@ -1407,28 +1689,30 @@ function exportShownotes() {
             lines.push('');
         });
     }
-
     if (state.quotes.length > 0) {
         lines.push('---');
         lines.push('## 💎 金句摘录');
         lines.push('');
         state.quotes.forEach(q => {
-            const sp = state.speakers.find(s => s.id === q.speakerId);
-            const spName = sp ? sp.name : '未知';
+            const spName = q.speakerName || (() => {
+                const sp = state.speakers.find(s => s.id === q.speakerId);
+                return sp ? sp.name : '';
+            })();
+            const displayName = spName || `说话人${q.speakerId != null ? q.speakerId + 1 : ''}`.trim();
             const marker = q.isPartial ? ' [节录]' : '';
-            lines.push(`\`${formatTimeShort(q.startTime)}\` **${spName}**${marker}：${q.text}`);
+            lines.push(`\`${formatTimeShort(q.startTime)}\` **${displayName}**${marker}：${q.text}`);
             lines.push('');
         });
     }
-
     if (state.viewpoints.length > 0) {
         lines.push('---');
         lines.push('## 🎤 嘉宾观点');
         lines.push('');
         const vpBySpeaker = {};
         state.viewpoints.forEach(vp => {
-            if (!vpBySpeaker[vp.speakerName]) vpBySpeaker[vp.speakerName] = [];
-            vpBySpeaker[vp.speakerName].push(vp);
+            const name = vp.speakerName || `说话人${vp.speakerId != null ? vp.speakerId + 1 : ''}`.trim();
+            if (!vpBySpeaker[name]) vpBySpeaker[name] = [];
+            vpBySpeaker[name].push(vp);
         });
         Object.entries(vpBySpeaker).forEach(([name, vps]) => {
             lines.push(`**${name}**：`);
@@ -1436,19 +1720,122 @@ function exportShownotes() {
             lines.push('');
         });
     }
-
     lines.push('---');
     lines.push(`*由播客转写整理工具生成 · ${new Date().toLocaleString()}*`);
+    return lines.join('\n');
+}
 
-    const content = lines.join('\n');
-    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+function renderShownotesPreview() {
+    const previewBody = document.getElementById('shownotesPreviewBody');
+    const title = document.getElementById('episodeTitle').value || '未命名节目';
+    const desc = document.getElementById('episodeDesc').value || '';
+
+    if (!desc && state.chapters.length === 0 && state.quotes.length === 0) {
+        previewBody.innerHTML = '<div class="empty-state">暂无内容，请先添加章节、金句或生成简介</div>';
+        return;
+    }
+
+    let html = '';
+    html += `<h1>${escapeHtml(title)}</h1>`;
+    if (desc) {
+        html += `<p>${escapeHtml(desc).replace(/\n/g, '<br>')}</p>`;
+    }
+
+    if (state.chapters.length > 0) {
+        html += '<hr>';
+        html += '<h2>📑 时间线 & 章节</h2>';
+        state.chapters.forEach((ch, i) => {
+            html += `<div class="chapter-item">`;
+            html += `<span class="chapter-time">${formatTimeShort(ch.startTime)}</span>`;
+            html += `<span class="chapter-title-text">${i + 1}. ${escapeHtml(ch.title)}</span>`;
+            html += `</div>`;
+            if (ch.summary) {
+                html += `<blockquote>${escapeHtml(ch.summary)}</blockquote>`;
+            }
+        });
+    }
+
+    if (state.quotes.length > 0) {
+        html += '<hr>';
+        html += '<h2>💎 金句摘录</h2>';
+        state.quotes.forEach(q => {
+            const spName = q.speakerName || (() => {
+                const sp = state.speakers.find(s => s.id === q.speakerId);
+                return sp ? sp.name : '';
+            })();
+            const displayName = spName || `说话人${q.speakerId != null ? q.speakerId + 1 : ''}`.trim();
+            const partialTag = q.isPartial ? '<span class="q-partial">节录</span>' : '';
+            html += `<div class="quote-item-preview">`;
+            html += `<span class="q-time">${formatTimeShort(q.startTime)}</span>`;
+            html += `<span class="q-speaker">${escapeHtml(displayName)}</span>${partialTag}`;
+            html += `<br>${escapeHtml(q.text)}`;
+            html += `</div>`;
+        });
+    }
+
+    if (state.viewpoints.length > 0) {
+        html += '<hr>';
+        html += '<h2>🎤 嘉宾观点</h2>';
+        const vpBySpeaker = {};
+        state.viewpoints.forEach(vp => {
+            const name = vp.speakerName || `说话人${vp.speakerId != null ? vp.speakerId + 1 : ''}`.trim();
+            if (!vpBySpeaker[name]) vpBySpeaker[name] = [];
+            vpBySpeaker[name].push(vp);
+        });
+        Object.entries(vpBySpeaker).forEach(([name, vps]) => {
+            html += `<div class="viewpoint-speaker-name">${escapeHtml(name)}</div>`;
+            html += '<ol>';
+            vps.forEach(vp => {
+                html += `<li>${escapeHtml(vp.text)}</li>`;
+            });
+            html += '</ol>';
+        });
+    }
+
+    previewBody.innerHTML = html;
+}
+
+function toggleShownotesPreview() {
+    const preview = document.getElementById('shownotesPreview');
+    const btn = document.getElementById('togglePreviewBtn');
+    if (preview.style.display === 'none') {
+        preview.style.display = 'flex';
+        btn.textContent = '👁️ 关闭预览';
+        btn.classList.add('active');
+        renderShownotesPreview();
+    } else {
+        preview.style.display = 'none';
+        btn.textContent = '👁️ 预览 Shownotes';
+        btn.classList.remove('active');
+    }
+}
+
+function copyShownotes() {
+    const text = buildShownotesText();
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Shownotes 已复制到剪贴板');
+    }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Shownotes 已复制到剪贴板');
+    });
+}
+
+function downloadShownotesMarkdown() {
+    const text = buildShownotesText();
+    const title = document.getElementById('episodeTitle').value || 'shownotes';
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${title.replace(/[\\/:*?"<>|]/g, '_')}_shownotes.md`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Shownotes 已导出（Markdown 格式）');
+    showToast('Shownotes 已下载（Markdown 格式）');
 }
 
 function switchTab(tabName) {

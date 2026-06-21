@@ -896,6 +896,68 @@ body.multi-select-mode .utterance {
     transform: scale(1.1);
 }
 
+.utterance-edit-panel {
+    margin-top: 10px;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.utterance-edit-panel .edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.utterance-edit-panel .edit-row label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    white-space: nowrap;
+    min-width: 60px;
+}
+
+.utterance-edit-panel .edit-row select,
+.utterance-edit-panel .edit-row input[type="text"] {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    background: white;
+}
+
+.utterance-edit-panel .edit-row textarea {
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    background: white;
+    resize: vertical;
+    min-height: 60px;
+}
+
+.utterance-edit-panel .edit-time input {
+    flex: 1;
+    font-family: monospace;
+}
+
+.utterance-edit-panel .edit-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.utterance-edit-panel .edit-spacer {
+    flex: 1;
+}
+
 /* Chapters */
 .chapters-header {
     padding: 12px 16px;
@@ -1057,6 +1119,155 @@ body.multi-select-mode .utterance {
 
 .chapter-action-btn.delete:hover {
     background: #fee2e2;
+}
+
+.header-spacer {
+    flex: 1;
+}
+
+/* Shownotes Preview */
+.shownotes-preview {
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    max-height: 55%;
+    min-height: 280px;
+}
+
+.shownotes-preview-header {
+    padding: 10px 16px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+}
+
+.shownotes-preview-header h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.shownotes-preview-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.shownotes-preview-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    background: white;
+}
+
+.shownotes-preview-body h1 {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 10px 0;
+    line-height: 1.4;
+}
+
+.shownotes-preview-body h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 18px 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--border);
+}
+
+.shownotes-preview-body h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 12px 0 6px 0;
+}
+
+.shownotes-preview-body p {
+    margin: 6px 0;
+}
+
+.shownotes-preview-body blockquote {
+    margin: 8px 0;
+    padding: 8px 12px;
+    border-left: 3px solid var(--primary);
+    background: #f5f3ff;
+    color: var(--text-secondary);
+    border-radius: 0 6px 6px 0;
+}
+
+.shownotes-preview-body .chapter-item {
+    margin: 8px 0;
+}
+
+.shownotes-preview-body .chapter-time {
+    font-family: monospace;
+    font-weight: 600;
+    color: var(--primary);
+    margin-right: 8px;
+}
+
+.shownotes-preview-body .chapter-title-text {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.shownotes-preview-body .quote-item-preview {
+    margin: 6px 0;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.shownotes-preview-body .quote-item-preview .q-time {
+    font-family: monospace;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.shownotes-preview-body .quote-item-preview .q-speaker {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 4px;
+}
+
+.shownotes-preview-body .quote-item-preview .q-partial {
+    font-size: 11px;
+    color: #d97706;
+    background: #fef3c7;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+}
+
+.shownotes-preview-body .viewpoint-speaker-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 8px 0 4px 0;
+}
+
+.shownotes-preview-body ol,
+.shownotes-preview-body ul {
+    margin: 4px 0 8px 20px;
+    padding: 0;
+}
+
+.shownotes-preview-body li {
+    margin: 2px 0;
+}
+
+.shownotes-preview-body hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 14px 0;
 }
 
 /* Form Elements */

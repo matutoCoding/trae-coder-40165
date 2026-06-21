@@ -150,8 +150,24 @@
                         <button class="btn btn-primary btn-sm" id="addChapterBtn">+ 添加章节</button>
                         <button class="btn btn-outline btn-sm" id="generateSummaryBtn">✨ 生成节目简介</button>
                         <button class="btn btn-outline btn-sm" id="exportShownotesBtn">📤 导出 Shownotes</button>
+                        <div class="header-spacer"></div>
+                        <button class="btn btn-outline btn-sm" id="togglePreviewBtn">👁️ 预览 Shownotes</button>
                     </div>
                     <div class="chapters-content" id="chaptersContent">
+                    </div>
+
+                    <!-- Shownotes 预览区 -->
+                    <div class="shownotes-preview" id="shownotesPreview" style="display:none;">
+                        <div class="shownotes-preview-header">
+                            <h4>📝 Shownotes 发布预览</h4>
+                            <div class="shownotes-preview-actions">
+                                <button class="btn btn-outline btn-sm" id="copyShownotesBtn">📋 复制全文</button>
+                                <button class="btn btn-primary btn-sm" id="downloadShownotesBtn">⬇️ 下载 Markdown</button>
+                            </div>
+                        </div>
+                        <div class="shownotes-preview-body" id="shownotesPreviewBody">
+                            <div class="empty-state">暂无内容，请先添加章节或生成简介</div>
+                        </div>
                     </div>
                 </div>
             </main>
